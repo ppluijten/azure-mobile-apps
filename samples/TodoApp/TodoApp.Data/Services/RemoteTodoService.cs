@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 using Microsoft.Datasync.Client;
+using Microsoft.Datasync.Client.SQLiteStore;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -26,7 +27,8 @@ namespace TodoApp.Data.Services
         /// <summary>
         /// Reference to the table used for datasync operations.
         /// </summary>
-        private IRemoteTable<TodoItem> _table = null;
+        //private IRemoteTable<TodoItem> _table = null;
+        private IOfflineTable<TodoItem> _table = null;
 
         /// <summary>
         /// When set to true, the client and table and both initialized.
@@ -47,6 +49,11 @@ namespace TodoApp.Data.Services
         /// When using authentication, the token requestor to use.
         /// </summary>
         public Func<Task<AuthenticationToken>> TokenRequestor;
+
+        /// <summary>
+        /// The path to the offline database
+        /// </summary>
+        public string OfflineDb { get; set; }
 
         /// <summary>
         /// Creates a new <see cref="RemoteTodoService"/> with no authentication.
@@ -86,16 +93,8 @@ namespace TodoApp.Data.Services
                     return;
                 }
 
-                var options = new DatasyncClientOptions
-                {
-                    HttpPipeline = new HttpMessageHandler[] { new LoggingHandler() }
-                };
-
-                // Initialize the client.
-                _client = TokenRequestor == null 
-                    ? new DatasyncClient(Constants.ServiceUri, options)
-                    : new DatasyncClient(Constants.ServiceUri, new GenericAuthenticationProvider(TokenRequestor), options);
-                _table = _client.GetRemoteTable<TodoItem>();
+                //this.SetupRemoteTable();
+                await this.SetupOfflineTableAsync();
 
                 // Set _initialied to true to prevent duplication of locking.
                 _initialized = true;
@@ -110,6 +109,43 @@ namespace TodoApp.Data.Services
                 _asyncLock.Release();
             }
         }
+
+        private async Task SetupOfflineTableAsync()
+        {
+            var connectionString = new UriBuilder { Scheme = "file", Path = OfflineDb, Query = "?mode=rwc" }.Uri.ToString();
+            var store = new OfflineSQLiteStore(connectionString);
+            store.DefineTable<TodoItem>();
+            var options = new DatasyncClientOptions
+            {
+                OfflineStore = store,
+                HttpPipeline = new HttpMessageHandler[] { new LoggingHandler() }
+            };
+
+            // Create the datasync client.
+            _client = TokenRequestor == null
+                ? new DatasyncClient(Constants.ServiceUri, options)
+                : new DatasyncClient(Constants.ServiceUri, new GenericAuthenticationProvider(TokenRequestor), options);
+
+            // Initialize the database
+            await _client.InitializeOfflineStoreAsync();
+
+            // Get a reference to the offline table.
+            _table = _client.GetOfflineTable<TodoItem>();
+        }
+
+        //private void SetupRemoteTable()
+        //{
+        //    var options = new DatasyncClientOptions
+        //    {
+        //        HttpPipeline = new HttpMessageHandler[] { new LoggingHandler() }
+        //    };
+
+        //    // Initialize the client.
+        //    _client = TokenRequestor == null
+        //        ? new DatasyncClient(Constants.ServiceUri, options)
+        //        : new DatasyncClient(Constants.ServiceUri, new GenericAuthenticationProvider(TokenRequestor), options);
+        //    _table = _client.GetRemoteTable<TodoItem>();
+        //}
 
         /// <summary>
         /// Get all the items in the list.
@@ -129,7 +165,12 @@ namespace TodoApp.Data.Services
         {
             await InitializeAsync();
 
-            // Remote table doesn't need to refresh the local data.
+            // First, push all the items in the table.
+            await _table.PushItemsAsync();
+
+            // Then, pull all the items in the table.
+            await _table.PullItemsAsync();
+
             return;
         }
 

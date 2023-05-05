@@ -18,7 +18,10 @@ namespace TodoApp.MAUI
         public MainPage()
         {
             InitializeComponent();
-            TodoService = new RemoteTodoService();
+            TodoService = new RemoteTodoService()
+            {
+                OfflineDb = FileSystem.CacheDirectory + "/offline.db"
+            };
             viewModel = new MainViewModel(this, TodoService);
             BindingContext = viewModel;
         }
